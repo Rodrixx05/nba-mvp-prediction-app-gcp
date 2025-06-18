@@ -4,8 +4,6 @@ This repository contains the code generated for running an application which dep
 
 Anybody who wants to check the NBA MVP Prediction Web App can test it navigating to the next link: [nba-mvp-prediction.xyz](https://nba-mvp-prediction.xyz). 
 
-The app is currently in an initial phase and it will be updated regularly during the next months.
-
 ## App Structure
 
 The following diagram shows the structure of the app:
@@ -21,20 +19,23 @@ Every day at 10:00 UTC, a *GCP Cloud Function* function is triggered through a *
 1. Webscraping is used to extract individual stats (both standard and advanced) from each NBA player from [Basketball Reference](https://www.basketball-reference.com). To do that, the function uses a custom module (named basketball_reference_rodrixx) created to extract the stats from the website using *BeautifulSoup4* library. This same module does also some data cleaning and parses the information into a DataFrame.
 2. The stats are pre-procesed so that the ML models can ingest them. This is achieved using a *Scikit-Learn* pipeline and several custom transformers defined in a custom module (named preprocessing_lib_rodrixx). The pipeline drops player rows which are repeated because of a team switch during the leage, sets indexes, encodes categorical data and drops some columns.
 3. The processed stats are passed to the ML models and the MVP results are predicted. The models in pickle format are saved in a *GCP Cloud Storage* bucket, so that the lambda function can load them in the execution process. These models are explained in more detail in [this section](#ml-models)
-4. The output of the model is post-processed in order to extract additional metrics (votes, adjusted share and rank), and also deleted columns that were not used by the model are added again to the dataset. Column names are formatted so that the database can handle them. A custom module is used for this part of the process (named postprocessing_lib_rodrixx).
+4. The output of the model is post-processed in order to extract additional metrics (votes, adjusted share and rank), and also deleted columns that were not used by the model are added again to the dataset. Column names are formatted so that the database can handle them. A custom module is used for this part of the process (named postprocessing_lib_rodrixx). Also, players that don't meet the requirement of minimum games played to opt to the trophy are discarded.
 5. Post-processed data is finally appended to the corresponding PostgreSQL table using the *SQLalchemy* module.
 
 This *GCP Cloud Function* code is implemented in Python as a container image. The repo containing the code and Dockerfile to deploy the container image can be found [here](https://github.com/Rodrixx05/nba-mvp-prediction-data-getter). The image is uploaded to a *GCP Cloud Storage* bucket in ZIP format so that *GCP Cloud Function* can run it every time the it is triggered.
 
 ### ML Models
 
-The 3 machine learning models that are currently used by the app are based on the following methods:
+The machine learning models that are currently used by the app are based on the following methods:
 
-- **Random Forest Regressor**: it combines the output of multiple decision trees to reach a single result.
-- **XGBoost Regressor**: it implements the gradient boosting algorithm, adding one decision tree at a time to the ensemble and fit to correct the prediction errors made by prior models.
-- **Ensemble Regressor**: it combines both previous methods using a voting regressor to obtain the final result.
+- **Random Forest Regressor**
+- **XGBoost Regressor**
+- **Ensemble Regressor** (deprecated)
+- **LightGBM**
 
-All the models have been trained using individual stats (both standard and advanced stats) as predictors and the MVP voting share as the target, from the seasons between years 1982 and 2015. They have also been validated using data from seasons between 2015 and 2022. 
+All the models have been retrained before the beginning of each season using individual stats (both standard and advanced stats) as predictors and the MVP voting share as the target- The validation dataset is the data from the last 8 seasons, and the training dataset is from the season 1982 until the previous season before the validation dataset.
+
+From the 2024-2025 season the models were refactored (v2) in order to just use the most influent predictors and eliminate noise.
 
 The output of the models is served in 4 different forms:
 
@@ -60,10 +61,10 @@ This part of the app is meant to be working 24/7 so that anyone who wants to che
 
 The services deployed in the docker-compose cluster are briefly explained in the next list:
 
-1. **Database**: a *PostgreSQL* database is used to store the daily stats and prediction results that are collected by the *AWS Lambda* function. 
+1. **Database**: a *PostgreSQL* database is used to store the daily stats and prediction results that are collected by the *GCP Cloud Function*. 
 2. **Interactive web app + WSGI**: a dashboard with graphs and tables is created using mainly *Dash* and *Plotly* libraries. These modules have the ability to build both the back-end and the front-end of the app with Python code. The web app queries the data requested by the user from the database using the *SQLalchemy* module, and the queries are refreshed every time the user changes and interactive component of the interface. In order to enable the communication of the Python web app with the web server, a WSGI (Web Server Gateway Interface) is implemented using *Gunicorn*. Both the web app and the WSGI are deployed as a unique service using the custom container image named dash-app, and it can be found in this [folder](dash-files/) of the repository.
 3. **Web server**: an *Nginx* reverse proxy listens to HTTP requests on port 80 and redirects them to the web app content through the WSGI. A custom Nginx image has been developed for this purpose, and it can be found in this [folder](nginx-files/)
-4. **SSL certificate provider**: in order to enable secure HTTPS requests to the app, a *Certbot* service is in charge to obtain the SSL certificate for encrypted connections. Once a month, a cronjob is triggered in the *AWS EC2* server which re-launches the certbot service to renew the certificate.
+4. **SSL certificate provider**: in order to enable secure HTTPS requests to the app, a *Certbot* service is in charge to obtain the SSL certificate for encrypted connections. Once a month, a cronjob is triggered in the *GCP Compute Engine* server which re-launches the certbot service to renew the certificate.
 
 ### Web App Description
 
